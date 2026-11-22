@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manifest clone patcher</title>
+<style>
+:root{
+  --bg:#e8edf2; --sheet:#ffffff; --ink:#111b26; --muted:#5a6775; --line:#d3dbe3;
+  --accent:#2b4eff; --accent-ink:#ffffff;
+  --del-bg:#fbe3e1; --del-ink:#8a1c14; --add-bg:#dcf2e3; --add-ink:#0f5a2c;
+  --warn:#8a5a00; --err:#b3261e;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0e131a; --sheet:#161d26; --ink:#e7ecf2; --muted:#94a1af; --line:#28323e;
+    --accent:#8aa0ff; --accent-ink:#0b1020;
+    --del-bg:#3b1f1f; --del-ink:#ffb4ab; --add-bg:#163325; --add-ink:#9be3b5;
+    --warn:#f0c36a; --err:#ff9a92;
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:16px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:max(16px,env(safe-area-inset-top)) 16px max(32px,env(safe-area-inset-bottom));
+}
+main{max-width:640px;margin:0 auto}
+h1{font-size:1.6rem;line-height:1.15;letter-spacing:-.02em;margin:8px 0 6px}
+.lede{margin:0 0 20px;color:var(--muted)}
+.sheet{background:var(--sheet);border:1px solid var(--line);border-radius:14px;padding:20px}
+.block+.block{margin-top:22px;padding-top:22px;border-top:1px solid var(--line)}
+.fieldlabel{display:block;font-weight:650;margin-bottom:8px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.pick{
+  display:flex;align-items:center;justify-content:center;min-height:52px;
+  border:1.5px dashed var(--muted);border-radius:10px;padding:10px 14px;
+  font-weight:650;cursor:pointer;text-align:center;
+}
+.pick:hover{border-color:var(--accent)}
+.pick:focus-within{outline:3px solid var(--accent);outline-offset:2px}
+#fileInfo{margin:10px 0 0;color:var(--muted);font-size:.9rem;word-break:break-all}
+
+input[type=text]{
+  width:100%;min-height:48px;font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:transparent;color:inherit;
+}
+input[type=text]:focus-visible{outline:3px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+input[type=text]::placeholder{color:var(--muted);opacity:.55}
+.help{margin:8px 0 0;color:var(--muted);font-size:.9rem}
+.msg{margin:10px 0 0;font-size:.95rem}
+.msg[data-kind=err]{color:var(--err)}
+.msg[data-kind=warn]{color:var(--warn)}
+
+.swap{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;line-height:1.35}
+.swap .old{display:block;color:var(--muted);text-decoration:line-through;text-decoration-thickness:1px;font-size:.95rem}
+.swap .new{display:block;font-size:1.25rem;font-weight:700;margin-top:4px}
+
+.stats{display:grid;grid-template-columns:1fr auto;gap:6px 16px;margin:18px 0 0}
+.stats dt{color:var(--muted)}
+.stats dd{margin:0;text-align:right;font-weight:650;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+.actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
+.btn{
+  flex:1 1 140px;min-height:50px;border-radius:10px;font:inherit;font-weight:650;
+  border:1.5px solid var(--accent);cursor:pointer;background:transparent;color:var(--accent);
+}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+h2{font-size:1rem;margin:24px 0 8px}
+.diff{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:60vh;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.78rem;line-height:1.45}
+.row{border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .ln{padding:3px 8px;color:var(--muted);font-size:.72rem}
+.row .del,.row .add{position:relative;padding:3px 8px 3px 26px;white-space:pre-wrap;word-break:break-all}
+.row .del{background:var(--del-bg);color:var(--del-ink)}
+.row .add{background:var(--add-bg);color:var(--add-ink)}
+.row .del::before,.row .add::before{position:absolute;left:9px}
+.row .del::before{content:"\2212"}
+.row .add::before{content:"+"}
+.note{margin:12px 0 0;color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Manifest clone patcher</h1>
+  <p class="lede">Pick an unpatched AndroidManifest.xml, name the clone, and get the patched copy. Everything runs on this device. Nothing is uploaded.</p>
+
+  <div class="sheet">
+    <div class="block">
+      <span class="fieldlabel" id="fileLabel">Manifest file</span>
+      <label class="pick">
+        <span id="pickText">Choose manifest file</span>
+        <input class="vh" id="file" type="file" aria-labelledby="fileLabel">
+      </label>
+      <p id="fileInfo" class="mono">No file chosen</p>
+    </div>
+
+    <div class="block">
+      <label class="fieldlabel" for="name">Clone name</label>
+      <input id="name" type="text" value="" placeholder="Choose a manifest first" autocomplete="off" autocapitalize="none" spellcheck="false">
+      <p class="help">Replaces the last part of the package name. Include dots to set the whole package yourself.</p>
+      <p id="msg" class="msg" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="block">
+      <label class="fieldlabel" for="appname">App name (optional)</label>
+      <input id="appname" type="text" value="" placeholder="Choose a manifest first" autocomplete="off" spellcheck="false" style="font-family:inherit">
+      <p class="help">What the app drawer and Settings show. Leave it empty to keep the name from the manifest (shown faded).</p>
+    </div>
+
+    <div class="block" id="out" hidden>
+      <div class="swap">
+        <span class="old" id="oldPkg"></span>
+        <span class="new" id="newPkg"></span>
+      </div>
+      <dl class="stats" id="stats"></dl>
+      <div class="actions">
+        <button type="button" class="btn primary" id="dl">Download patched XML</button>
+        <button type="button" class="btn" id="cp">Copy to clipboard</button>
+      </div>
+      <h2>Changed lines</h2>
+      <div class="diff" id="diff"></div>
+      <p class="note">Class names, intent actions and metadata are left alone on purpose. They point at real code inside the dex.</p>
+    </div>
+  </div>
+</main>
+
+<script>
+// <core>
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function detectPkg(t){
+  const m = t.match(/<manifest\b[^>]*?\spackage="([^"]+)"/);
+  return m ? m[1] : null;
+}
+const unesc = s => s.replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+function detectLabel(t){
+  const a = t.match(/<application\b[^>]*>/);
+  const m = a && a[0].match(/android:label="([^"]*)"/);
+  return m ? m[1] : null;
+}
+function buildPkg(old, raw){
+  const n = raw.trim();
+  if(!n) return {err:'Type a name for the clone.'};
+  const pkg = n.includes('.') ? n : old.split('.').slice(0,-1).concat(n).join('.');
+  if(!pkg.includes('.')) return {err:'A package needs at least two parts, like com.example.app.'};
+  if(!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(pkg))
+    return {err:'Use letters, digits and underscores only. Every part must start with a letter.'};
+  if(pkg === old) return {err:'That matches the original package. Pick a different name.'};
+  return {pkg};
+}
+function patch(text, OLD, NEW, label){
+  const c = {pkg:0, auth:0, perm:0, aff:0, rel:0, lbl:0, lblMissing:false, changed:0};
+  const swap = v => {
+    if(v === OLD || v.startsWith(OLD + '.')){ c.changed++; return NEW + v.slice(OLD.length); }
+    return v;
+  };
+  // 1. package attribute on <manifest>
+  let out = text.replace(/(<manifest\b[^>]*?\spackage=")([^"]*)(")/, (m,a,v,z) => {
+    if(v !== OLD) return m;
+    c.pkg++; c.changed++;
+    return a + NEW + z;
+  });
+  // 2. provider authorities (can hold several, split by ;)
+  out = out.replace(/(android:authorities=")([^"]*)(")/g, (m,a,v,z) => {
+    const n = v.split(';').map(swap).join(';');
+    if(n !== v) c.auth++;
+    return a + n + z;
+  });
+  // 3. custom permission names that start with the old package
+  out = out.replace(/(<(?:uses-)?permission(?:-group|-tree|-sdk-23|-sdk-m)?\s[^>]*?android:name=")([^"]*)(")/g, (m,a,v,z) => {
+    const n = swap(v);
+    if(n !== v) c.perm++;
+    return a + n + z;
+  });
+  // 4. task affinities
+  out = out.replace(/(android:taskAffinity=")([^"]*)(")/g, (m,a,v,z) => {
+    const n = swap(v);
+    if(n !== v) c.aff++;
+    return a + n + z;
+  });
+  // 4b. component permissions and full process names that point at the old package
+  out = out.replace(/(android:(?:permission|readPermission|writePermission|process)=")([^"]*)(")/g, (m,a,v,z) => {
+    const n = swap(v);
+    if(n !== v) c.perm++;
+    return a + n + z;
+  });
+  // 5. relative class names (".Main" or "Main") resolve against package, so pin them to the old one
+  out = out.replace(/<(?:application|activity-alias|activity|service|receiver|provider|instrumentation)\b[^>]*>/g, tag =>
+    tag.replace(/(android:(?:name|targetActivity|parentActivityName|backupAgent|appComponentFactory|manageSpaceActivity)=")([^"]*)(")/g, (m,a,v,z) => {
+      if(v.startsWith('.')){ c.rel++; return a + OLD + v + z; }
+      if(v && !/[.@?]/.test(v)){ c.rel++; return a + OLD + '.' + v + z; }
+      return m;
+    })
+  );
+  // 6. app name: take the label the <application> tag uses and swap every use of that same value
+  if(label){
+    const appTag = out.match(/<application\b[^>]*>/);
+    const lm = appTag && appTag[0].match(/android:label="([^"]*)"/);
+    if(lm){
+      const safe = label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      out = out.replace(new RegExp('(android:label=")' + esc(lm[1]) + '(")', 'g'), (m,a,z) => { c.lbl++; return a + safe + z; });
+    } else {
+      c.lblMissing = true;
+    }
+  }
+  return {out, c};
+}
+// </core>
+
+(() => {
+  const $ = id => document.getElementById(id);
+  const fileEl = $('file'), nameEl = $('name'), msgEl = $('msg'), outEl = $('out');
+  let src = '', fileName = '', patched = '', outName = 'AndroidManifest.xml', nameTouched = false, appTouched = false;
+
+  const msg = (text, kind) => { msgEl.textContent = text || ''; msgEl.dataset.kind = kind || ''; };
+
+  function row(label, value){
+    const dt = document.createElement('dt'); dt.textContent = label;
+    const dd = document.createElement('dd'); dd.textContent = value;
+    $('stats').append(dt, dd);
+  }
+
+  // faded default for the app name: the label already in the manifest
+  function syncPlaceholder(){
+    const l = src ? detectLabel(src) : null;
+    $('appname').placeholder = !src ? 'Choose a manifest first' : (l || 'No label found in the manifest');
+  }
+
+  function run(){
+    msg(''); outEl.hidden = true;
+    if(!src) return;
+
+    const clean = src.replace(/^\uFEFF/, '');
+    if(clean.includes('\u0000') || !/^\s*(<\?xml|<manifest)/.test(clean)){
+      msg('This looks like a binary manifest. Open it in MT Manager\u2019s text editor and use that decompiled XML instead.', 'err');
+      return;
+    }
+    const old = detectPkg(src);
+    if(!old){ msg('No package attribute found on the <manifest> tag.', 'err'); return; }
+
+    const r = buildPkg(old, nameEl.value);
+    if(r.err){ msg(r.err, 'err'); return; }
+
+    const label = $('appname').value.trim();
+    const {out, c} = patch(src, old, r.pkg, label);
+    patched = out;
+    outName = 'AndroidManifest-' + r.pkg.split('.').pop() + '.xml';
+
+    $('oldPkg').textContent = old;
+    $('newPkg').textContent = r.pkg;
+
+    const origRefs = (src.match(new RegExp(esc(old) + '(?=[."])', 'g')) || []).length;
+    const hits = out.split(r.pkg).length - 1;
+    $('stats').textContent = '';
+    row('Package attribute', c.pkg);
+    row('Provider authorities', c.auth);
+    row('Permission and process names', c.perm);
+    row('Task affinities', c.aff);
+    row('Relative class names pinned', c.rel);
+    const oldLbl = detectLabel(src);
+    row('App name in manifest', oldLbl ? (oldLbl.startsWith('@') ? oldLbl + ' (resource)' : oldLbl) : 'none');
+    row('App name after patch', label || 'unchanged');
+    if(label) row('App name labels', c.lbl);
+    row('New package appears', hits + (hits === 1 ? ' time' : ' times'));
+    row('Class and action references kept', Math.max(0, origRefs - c.changed));
+
+    const warns = [];
+    if(/android:sharedUserId=/.test(src)) warns.push('This manifest sets sharedUserId. Remove it or the clone may fail to install.');
+    if(label && c.lblMissing) warns.push('No label found on the <application> tag, so the app name was not changed.');
+    if(c.auth === 0) warns.push('No provider authorities were changed. If the app has providers, check them by hand.');
+    if(warns.length) msg(warns.join(' '), 'warn');
+
+    const a = src.split('\n'), b = out.split('\n'), d = $('diff');
+    d.textContent = '';
+    let shown = 0;
+    for(let i = 0; i < a.length && shown < 200; i++){
+      if(a[i] === b[i]) continue;
+      shown++;
+      const wrap = document.createElement('div'); wrap.className = 'row';
+      const ln = document.createElement('div'); ln.className = 'ln'; ln.textContent = 'line ' + (i + 1);
+      const del = document.createElement('div'); del.className = 'del'; del.textContent = a[i].trim();
+      const add = document.createElement('div'); add.className = 'add'; add.textContent = b[i].trim();
+      wrap.append(ln, del, add); d.append(wrap);
+    }
+    if(!shown){ d.textContent = 'No lines changed.'; }
+    outEl.hidden = false;
+  }
+
+  fileEl.addEventListener('change', async () => {
+    const f = fileEl.files && fileEl.files[0];
+    if(!f) return;
+    fileName = f.name;
+    try { src = await f.text(); } catch(e){ src = ''; msg('Could not read that file.', 'err'); return; }
+    fileEl.value = '';
+    const det = detectPkg(src);
+    if(det && !nameTouched) nameEl.value = det.split('.').pop() + '2';
+    const dl = detectLabel(src);
+    if(!appTouched) $('appname').value = (dl && !dl.startsWith('@')) ? unesc(dl) : '';
+    syncPlaceholder();
+    $('fileInfo').textContent = fileName + '  (' + Math.round(src.length / 1024) + ' KB)';
+    $('pickText').textContent = 'Choose a different file';
+    run();
+  });
+  nameEl.addEventListener('input', () => { nameTouched = true; syncPlaceholder(); run(); });
+  syncPlaceholder();
+  $('appname').addEventListener('input', () => { appTouched = true; run(); });
+
+  $('dl').addEventListener('click', () => {
+    if(window.AndroidBridge){ window.AndroidBridge.save(outName, patched); return; }
+    const url = URL.createObjectURL(new Blob([patched], {type:'application/xml'}));
+    const a = document.createElement('a');
+    a.href = url; a.download = outName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  });
+
+  async function copyText(text){
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch(e){
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch(_){}
+      ta.remove();
+      return ok;
+    }
+  }
+  $('cp').addEventListener('click', async () => {
+    const btn = $('cp');
+    const ok = await copyText(patched);
+    btn.textContent = ok ? 'Copied' : 'Copy failed, use Download';
+    setTimeout(() => { btn.textContent = 'Copy to clipboard'; }, 1800);
+  });
+})();
+</script>
+</body>
+</html>
+
