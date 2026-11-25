@@ -1,6 +1,7 @@
 package com.example.emptyviewsactivity
 
 import com.android.apksig.ApkSigner
+import com.android.apksig.ApkVerifier
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -36,6 +37,7 @@ object ApkBuilder {
                 writeAligned(zf, res.bytes, unsigned)
             }
             sign(unsigned, output, key)
+            check(output)
         } finally {
             unsigned.delete()
         }
@@ -113,6 +115,15 @@ object ApkBuilder {
                 }
                 zos.closeEntry()
             }
+        }
+    }
+
+    /** Runs Android's own signature check on the finished file, so a bad APK is caught before you save it. */
+    private fun check(apk: File) {
+        val r = ApkVerifier.Builder(apk).build().verify()
+        if (!r.isVerified || !(r.isVerifiedUsingV2Scheme || r.isVerifiedUsingV3Scheme)) {
+            val why = r.errors.joinToString("; ") { it.toString() }.take(300)
+            throw IllegalStateException("The signed APK failed its own check. " + why)
         }
     }
 

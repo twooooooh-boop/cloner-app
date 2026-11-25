@@ -6,7 +6,8 @@ class ManifestInfo(
     val packageName: String,
     val labelKind: String, // "string", "resource" or "none"
     val label: String,
-    val sharedUserId: Boolean
+    val sharedUserId: Boolean,
+    val splitNote: String // empty when the APK is a normal standalone one
 )
 
 class PatchCounts {
@@ -267,15 +268,38 @@ object AxmlPatcher {
         var kind = "none"
         var label = ""
         var shared = false
+        var split = ""
         for (el in d.starts) {
             val tag = d.tag(el)
+            if (tag == "meta-data") {
+                var key = ""
+                var truthy = false
+                for (i in 0 until d.attrCount(el)) {
+                    val b = d.attrBase(el, i)
+                    val nm = d.attrName(i32(d.a, b + 4))
+                    val t = u8(d.a, b + 15)
+                    if (nm == "name" && t == TYPE_STRING) key = d.pool.str(i32(d.a, b + 16)) ?: ""
+                    if (nm == "value") {
+                        truthy = if (t == TYPE_STRING) d.pool.str(i32(d.a, b + 16)) == "true" else i32(d.a, b + 16) != 0
+                    }
+                }
+                if (key == "com.android.vending.splits.required" && truthy)
+                    split = "This APK needs split APKs to run (an app bundle). A single base APK will not install."
+                continue
+            }
             if (tag != "application" && tag != "manifest") continue
             for (i in 0 until d.attrCount(el)) {
                 val b = d.attrBase(el, i)
                 val ns = i32(d.a, b)
                 val nameIdx = i32(d.a, b + 4)
+                if (tag == "manifest" && d.attrName(nameIdx) == "split")
+                    split = "This is a split APK (a piece of an app bundle), not a full app."
                 if (!d.isAndroid(ns, nameIdx)) continue
                 val name = d.attrName(nameIdx)
+                if (name == "isSplitRequired" && i32(d.a, b + 16) != 0 && split.isEmpty())
+                    split = "This APK needs split APKs to run (an app bundle). A single base APK will not install."
+                if (name == "requiredSplitTypes" && split.isEmpty())
+                    split = "This APK needs split APKs to run (an app bundle). A single base APK will not install."
                 if (tag == "manifest" && name == "sharedUserId") shared = true
                 if (tag == "application" && name == "label" && kind == "none") {
                     val type = u8(d.a, b + 15)
@@ -284,7 +308,7 @@ object AxmlPatcher {
                 }
             }
         }
-        return ManifestInfo(pkg, kind, label, shared)
+        return ManifestInfo(pkg, kind, label, shared, split)
     }
 
     fun patch(data: ByteArray, newPkg: String, newLabel: String): PatchResult {

@@ -401,6 +401,7 @@ function patch(text, OLD, NEW, label){
     apkBusy = false;
     let t = info.pkg + '  (' + (info.size / 1048576).toFixed(1) + ' MB)';
     if(info.shared) t += '\nThis APK sets sharedUserId. The clone may fail to install.';
+    if(info.split) t += '\n' + info.split;
     $('apkInfo').textContent = t;
     $('apkPick').textContent = 'Choose a different APK';
     if(!nameTouched) nameEl.value = info.pkg.split('.').pop() + '2';

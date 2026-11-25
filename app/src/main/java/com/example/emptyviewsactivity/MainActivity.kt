@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
                 o.put("labelKind", info.labelKind)
                 o.put("label", info.label)
                 o.put("shared", info.sharedUserId)
+                o.put("split", info.splitNote)
                 o.put("size", f.length())
                 js("window.onApkPicked(" + o.toString() + ")")
                 jsStatus("", "")
