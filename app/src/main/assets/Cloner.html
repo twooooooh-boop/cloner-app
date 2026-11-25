@@ -52,6 +52,9 @@ input[type=text]{
 }
 input[type=text]:focus-visible{outline:3px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
 input[type=text]::placeholder{color:var(--muted);opacity:.55}
+select{width:100%;min-height:48px;font:inherit;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:transparent;color:inherit}
+select:focus-visible{outline:3px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+select option{color:#111b26}
 .help{margin:8px 0 0;color:var(--muted);font-size:.9rem}
 .msg{margin:10px 0 0;font-size:.95rem}
 .msg[data-kind=err]{color:var(--err)}
@@ -128,8 +131,20 @@ h2{font-size:1rem;margin:24px 0 8px}
         <span class="old" id="apkOld"></span>
         <span class="new" id="apkNew"></span>
       </div>
+      <label class="fieldlabel" for="apkSign" style="margin-top:16px">Signing</label>
+      <select id="apkSign">
+        <option value="all">v1 + v2 + v3 (everything)</option>
+        <option value="v12">v1 + v2 only</option>
+        <option value="unsigned">Unsigned (sign it yourself)</option>
+      </select>
+      <label class="fieldlabel" for="apkKey" style="margin-top:14px">Key</label>
+      <select id="apkKey">
+        <option value="bundled">Built-in Cloner key</option>
+        <option value="phone">Key made on this phone</option>
+      </select>
       <div class="actions">
         <button type="button" class="btn primary" id="apkBuild">Build and save APK</button>
+        <button type="button" class="btn" id="apkInstall" hidden>Install now</button>
       </div>
       <p id="apkMsg" class="msg" role="status" aria-live="polite"></p>
       <dl class="stats" id="apkStats"></dl>
@@ -150,6 +165,7 @@ h2{font-size:1rem;margin:24px 0 8px}
       <p class="note">Class names, intent actions and metadata are left alone on purpose. They point at real code inside the dex.</p>
     </div>
   </div>
+<p class="help" style="text-align:center;margin:18px 0 0">Cloner build 7 · signing v1+v2+v3, in-app install</p>
 </main>
 
 <script>
@@ -392,7 +408,8 @@ function patch(text, OLD, NEW, label){
     $('apkBuild').disabled = true;
     $('apkStats').textContent = '';
     apkMsg('Working\u2026', '');
-    window.AndroidBridge.buildApk(r.pkg, $('appname').value.trim());
+    $('apkInstall').hidden = true;
+    window.AndroidBridge.buildApk(r.pkg, $('appname').value.trim(), $('apkSign').value, $('apkKey').value);
   });
 
   // called by the app
@@ -420,7 +437,10 @@ function patch(text, OLD, NEW, label){
     }
   };
 
+  $('apkInstall').addEventListener('click', () => { window.AndroidBridge.installApk(); });
+
   window.onApkBuilt = c => {
+    $('apkInstall').hidden = false;
     const dl = $('apkStats');
     dl.textContent = '';
     const add = (l, v) => {

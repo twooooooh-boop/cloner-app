@@ -30,7 +30,7 @@ object ApkBuilder {
     }
 
     /** Patches the manifest, aligns the zip, signs it. Returns what was changed. */
-    fun build(input: File, output: File, newPkg: String, newLabel: String, key: SigningKey): PatchCounts {
+    fun build(input: File, output: File, newPkg: String, newLabel: String, key: SigningKey, mode: String = "all"): PatchCounts {
         val unsigned = File(output.parentFile, output.name + ".unsigned")
         unsigned.delete()
         output.delete()
@@ -43,14 +43,19 @@ object ApkBuilder {
             val res = AxmlPatcher.patch(manifest, newPkg, newLabel)
             counts = res.counts
             alignCopy(input, res.bytes, unsigned)
-            sign(unsigned, output, key)
-            check(output)
+            if (mode == "unsigned") {
+                unsigned.copyTo(output, overwrite = true)
+            } else {
+                sign(unsigned, output, key, mode)
+                check(output)
+            }
         } finally {
             unsigned.delete()
         }
         val fp = MessageDigest.getInstance("SHA-256").digest(key.certificate.encoded)
             .take(4).joinToString("") { "%02x".format(it) }
-        counts.note = "Aligned and signed with the " + key.source + " key (cert " + fp + ")."
+        counts.note = if (mode == "unsigned") "Aligned but NOT signed. Sign it yourself before installing."
+        else "Aligned and signed (" + schemes(mode) + ") with the " + key.source + " key (cert " + fp + ")."
         val bad = checkAlignment(output)
         if (bad != null) {
             counts.warn = true
@@ -261,18 +266,22 @@ object ApkBuilder {
         }
     }
 
-    private fun sign(unsigned: File, output: File, key: SigningKey) {
+    private fun schemes(mode: String) = when (mode) {
+        "v12" -> "v1+v2"
+        else -> "v1+v2+v3"
+    }
+
+    private fun sign(unsigned: File, output: File, key: SigningKey, mode: String) {
         val cfg = ApkSigner.SignerConfig.Builder("cloner", key.privateKey, listOf(key.certificate)).build()
-        // v1 is left to apksig (it adds it only when the app supports Android 6 or older),
-        // v2 is always on, v3 and v4 stay off: same choice Android's own build scripts make.
-        ApkSigner.Builder(listOf(cfg))
+        // v4 is a separate .idsig file that no installer needs, so it stays off.
+        val b = ApkSigner.Builder(listOf(cfg))
             .setInputApk(unsigned)
             .setOutputApk(output)
             .setCreatedBy("Cloner")
+            .setV1SigningEnabled(true)
             .setV2SigningEnabled(true)
-            .setV3SigningEnabled(false)
+            .setV3SigningEnabled(mode != "v12")
             .setV4SigningEnabled(false)
-            .build()
-            .sign()
+        b.build().sign()
     }
 }

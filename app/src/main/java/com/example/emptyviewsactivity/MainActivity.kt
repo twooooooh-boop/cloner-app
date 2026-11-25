@@ -1,8 +1,15 @@
 package com.example.emptyviewsactivity
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -13,6 +20,7 @@ import java.io.File
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -43,15 +51,13 @@ class MainActivity : AppCompatActivity() {
     private val apkSaver = registerForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")) { uri ->
         val built = apkOutput
         if (uri == null || built == null || !built.exists()) {
-            built?.delete()
-            jsStatus("Save cancelled. Press Build again to retry.", "warn")
+            jsStatus("Not saved. You can still press Install now, or Build again.", "warn")
         } else {
             Thread {
                 try {
                     contentResolver.openOutputStream(uri)?.use { out -> built.inputStream().use { it.copyTo(out) } }
                         ?: throw IllegalStateException("Could not write to that location.")
-                    built.delete()
-                    jsStatus("Saved. Open the APK from your file manager to install it.", "ok")
+                    jsStatus("Saved. You can also press Install now to see exactly what Android says.", "ok")
                 } catch (e: Exception) {
                     jsStatus("Could not save: " + (e.message ?: e.javaClass.simpleName), "err")
                 }
@@ -98,6 +104,69 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private val installAction = "com.example.emptyviewsactivity.INSTALL_RESULT"
+
+    private val installReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+            val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
+            when (status) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    @Suppress("DEPRECATION")
+                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                    if (confirm != null) startActivity(confirm)
+                }
+                PackageInstaller.STATUS_SUCCESS -> jsStatus("Installed. Open it from your app list.", "ok")
+                else -> jsStatus("Android refused the install. Code " + status + ". " + msg, "err")
+            }
+        }
+    }
+
+    /** Installs the built APK through Android's own installer API, so a refusal comes with the real reason. */
+    private fun startInstall() {
+        val f = apkOutput
+        if (f == null || !f.exists()) {
+            jsStatus("Build an APK first.", "err")
+            return
+        }
+        if (!packageManager.canRequestPackageInstalls()) {
+            jsStatus("Allow Cloner to install apps on the screen that just opened, come back, and press Install now again.", "warn")
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + packageName)))
+            return
+        }
+        Thread {
+            try {
+                val installer = packageManager.packageInstaller
+                val id = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+                installer.openSession(id).use { session ->
+                    f.inputStream().use { ins ->
+                        session.openWrite("base.apk", 0, f.length()).use { out ->
+                            ins.copyTo(out)
+                            session.fsync(out)
+                        }
+                    }
+                    val pi = PendingIntent.getBroadcast(
+                        this, id, Intent(installAction).setPackage(packageName),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                    )
+                    session.commit(pi.intentSender)
+                }
+                jsStatus("Installing. Confirm on the Android screen if it asks.", "")
+            } catch (e: Exception) {
+                jsStatus("Could not start the install: " + (e.message ?: e.javaClass.simpleName), "err")
+            }
+        }.start()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(installReceiver)
+        } catch (e: Exception) {
+            // was not registered
+        }
+    }
+
     inner class Bridge {
         @JavascriptInterface
         fun save(name: String, text: String) {
@@ -106,12 +175,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun installApk() {
+            runOnUiThread { startInstall() }
+        }
+
+        @JavascriptInterface
         fun pickApk() {
             runOnUiThread { apkPicker.launch("*/*") }
         }
 
         @JavascriptInterface
-        fun buildApk(pkg: String, label: String) {
+        fun buildApk(pkg: String, label: String, mode: String, keyMode: String) {
             val input = apkInput
             if (input == null || !input.exists()) {
                 jsStatus("Choose an APK first.", "err")
@@ -123,8 +197,9 @@ class MainActivity : AppCompatActivity() {
                 try {
                     jsStatus("Patching and signing. Big apps can take a minute.", "")
                     val out = File(cacheDir, "output.apk")
-                    val key = SigningKeys.loadOrCreate(File(filesDir, "signing")) { assets.open(it) }
-                    val c = ApkBuilder.build(input, out, pkg, label, key)
+                    val key = if (keyMode == "phone") SigningKeys.loadOrCreate(File(filesDir, "signing"))
+                    else SigningKeys.loadOrCreate(File(filesDir, "signing")) { assets.open(it) }
+                    val c = ApkBuilder.build(input, out, pkg, label, key, mode)
                     apkOutput = out
                     // ask Android itself to read and verify the finished file
                     val pi = packageManager.getPackageArchiveInfo(out.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
@@ -170,6 +245,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         web = findViewById(R.id.web)
+        ContextCompat.registerReceiver(this, installReceiver, IntentFilter(installAction), ContextCompat.RECEIVER_NOT_EXPORTED)
         web.settings.javaScriptEnabled = true
         web.addJavascriptInterface(Bridge(), "AndroidBridge")
         web.webChromeClient = object : WebChromeClient() {
