@@ -437,7 +437,8 @@ function patch(text, OLD, NEW, label){
     const w = [];
     if(c.lblMissing) w.push('No label found on the <application> tag, so the app name was not changed.');
     if(c.auth === 0) w.push('No provider authorities were changed. If the app has providers, check them by hand.');
-    apkMsg('Built and signed. Pick where to save it.' + (w.length ? ' ' + w.join(' ') : ''), w.length ? 'warn' : '');
+    if(c.warn) w.push('Check the note before installing.');
+    apkMsg('Built. ' + (c.note || '') + ' Pick where to save it.' + (w.length ? ' ' + w.join(' ') : ''), (w.length || c.warn) ? 'warn' : '');
   };
 })();
 </script>

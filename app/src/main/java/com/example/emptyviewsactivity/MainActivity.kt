@@ -1,5 +1,6 @@
 package com.example.emptyviewsactivity
 
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.JavascriptInterface
@@ -125,6 +126,18 @@ class MainActivity : AppCompatActivity() {
                     val key = SigningKeys.loadOrCreate(File(filesDir, "signing")) { assets.open(it) }
                     val c = ApkBuilder.build(input, out, pkg, label, key)
                     apkOutput = out
+                    // ask Android itself to read and verify the finished file
+                    val pi = packageManager.getPackageArchiveInfo(out.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
+                    val signers = pi?.signingInfo?.apkContentsSigners
+                    if (pi == null) {
+                        c.warn = true
+                        c.note += " WARNING: Android's own parser could not read the finished APK."
+                    } else if (signers == null || signers.isEmpty()) {
+                        c.warn = true
+                        c.note += " WARNING: Android found no valid signature in the finished APK."
+                    } else {
+                        c.note += " Android parsed it OK as " + pi.packageName + "."
+                    }
                     val o = JSONObject()
                     o.put("pkg", c.pkg)
                     o.put("auth", c.auth)
@@ -133,6 +146,8 @@ class MainActivity : AppCompatActivity() {
                     o.put("rel", c.rel)
                     o.put("lbl", c.lbl)
                     o.put("lblMissing", c.lblMissing)
+                    o.put("note", c.note)
+                    o.put("warn", c.warn)
                     js("window.onApkBuilt(" + o.toString() + ")")
                     runOnUiThread { apkSaver.launch(pkg + ".apk") }
                 } catch (e: Throwable) {

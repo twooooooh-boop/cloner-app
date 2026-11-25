@@ -12,7 +12,7 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
 
-class SigningKey(val privateKey: PrivateKey, val certificate: X509Certificate)
+class SigningKey(val privateKey: PrivateKey, val certificate: X509Certificate, val source: String = "stored")
 
 /**
  * One key signs every clone you build, so a clone can update over the previous one.
@@ -29,7 +29,7 @@ object SigningKeys {
                 val k = asset("signing/cloner-key.pk8").use { it.readBytes() }
                 val c = asset("signing/cloner-cert.der").use { it.readBytes() }
                 val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(k))
-                return SigningKey(key, parseCert(c))
+                return SigningKey(key, parseCert(c), "bundled")
             } catch (e: Exception) {
                 // no bundled key: use the stored one below
             }
@@ -53,7 +53,7 @@ object SigningKeys {
         val cert = parseCert(der)
         keyFile.writeBytes(pair.private.encoded)
         certFile.writeBytes(der)
-        return SigningKey(pair.private, cert)
+        return SigningKey(pair.private, cert, "generated")
     }
 
     private fun parseCert(der: ByteArray): X509Certificate =

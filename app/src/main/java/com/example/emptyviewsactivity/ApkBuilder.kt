@@ -7,6 +7,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.FilterOutputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -40,6 +42,14 @@ object ApkBuilder {
             check(output)
         } finally {
             unsigned.delete()
+        }
+        val fp = MessageDigest.getInstance("SHA-256").digest(key.certificate.encoded)
+            .take(4).joinToString("") { "%02x".format(it) }
+        counts.note = "Signed v1+v2 with the " + key.source + " key (cert " + fp + ")."
+        val bad = checkAlignment(output)
+        if (bad != null) {
+            counts.warn = true
+            counts.note += " WARNING: zip alignment problem: " + bad
         }
         return counts
     }
@@ -118,6 +128,52 @@ object ApkBuilder {
         }
     }
 
+    /** Looks at the finished zip the way the installer does: stored entries must start on an aligned offset. */
+    fun checkAlignment(apk: File): String? {
+        try {
+            RandomAccessFile(apk, "r").use { f ->
+                val len = f.length()
+                val tailLen = minOf(len, 70000L).toInt()
+                val tail = ByteArray(tailLen)
+                f.seek(len - tailLen)
+                f.readFully(tail)
+                var e = tailLen - 22
+                while (e >= 0 && !(tail[e] == 0x50.toByte() && tail[e + 1] == 0x4b.toByte() && tail[e + 2] == 0x05.toByte() && tail[e + 3] == 0x06.toByte())) e--
+                if (e < 0) return "no end of central directory"
+                fun u16(b: ByteArray, o: Int) = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+                fun u32(b: ByteArray, o: Int) = u16(b, o).toLong() or (u16(b, o + 2).toLong() shl 16)
+                val count = u16(tail, e + 10)
+                val cdOff = u32(tail, e + 16)
+                val cdSize = u32(tail, e + 12).toInt()
+                val cd = ByteArray(cdSize)
+                f.seek(cdOff)
+                f.readFully(cd)
+                var p = 0
+                val lfh = ByteArray(30)
+                for (i in 0 until count) {
+                    if (u32(cd, p) != 0x02014b50L) return "damaged central directory"
+                    val method = u16(cd, p + 10)
+                    val nl = u16(cd, p + 28)
+                    val el = u16(cd, p + 30)
+                    val cl = u16(cd, p + 32)
+                    val off = u32(cd, p + 42)
+                    val name = String(cd, p + 46, nl, Charsets.UTF_8)
+                    if (method == 0 && !name.endsWith("/")) {
+                        f.seek(off)
+                        f.readFully(lfh)
+                        val data = off + 30 + u16(lfh, 26) + u16(lfh, 28)
+                        val need = if (name.endsWith(".so")) 4096L else 4L
+                        if (data % need != 0L) return name + " starts at " + data
+                    }
+                    p += 46 + nl + el + cl
+                }
+            }
+        } catch (ex: Exception) {
+            return "could not check (" + ex.javaClass.simpleName + ")"
+        }
+        return null
+    }
+
     /** Runs Android's own signature check on the finished file, so a bad APK is caught before you save it. */
     private fun check(apk: File) {
         val r = ApkVerifier.Builder(apk).build().verify()
@@ -135,7 +191,7 @@ object ApkBuilder {
             .setCreatedBy("Cloner")
             .setV1SigningEnabled(true)
             .setV2SigningEnabled(true)
-            .setV3SigningEnabled(true)
+            .setV3SigningEnabled(false)
             .setV4SigningEnabled(false)
             .build()
             .sign()

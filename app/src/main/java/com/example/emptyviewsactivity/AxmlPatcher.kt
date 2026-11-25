@@ -19,6 +19,8 @@ class PatchCounts {
     var lbl = 0
     var lblMissing = false
     var changed = 0
+    var note = ""
+    var warn = false
 }
 
 class PatchResult(val bytes: ByteArray, val counts: PatchCounts)
