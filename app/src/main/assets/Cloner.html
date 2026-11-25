@@ -72,6 +72,7 @@ input[type=text]::placeholder{color:var(--muted);opacity:.55}
 }
 .btn.primary{background:var(--accent);color:var(--accent-ink)}
 .btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.btn:disabled{opacity:.5;cursor:default}
 
 h2{font-size:1rem;margin:24px 0 8px}
 .diff{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:60vh;
@@ -103,6 +104,12 @@ h2{font-size:1rem;margin:24px 0 8px}
       <p id="fileInfo" class="mono">No file chosen</p>
     </div>
 
+    <div class="block" id="apkBlock" hidden>
+      <span class="fieldlabel">APK file (to build a new APK)</span>
+      <button type="button" class="pick" id="apkPick" style="width:100%;background:transparent;color:inherit;font:inherit;font-weight:650">Choose APK</button>
+      <p id="apkInfo" class="mono help" style="white-space:pre-wrap;word-break:break-all">No APK chosen</p>
+    </div>
+
     <div class="block">
       <label class="fieldlabel" for="name">Clone name</label>
       <input id="name" type="text" value="" placeholder="Choose a manifest first" autocomplete="off" autocapitalize="none" spellcheck="false">
@@ -114,6 +121,18 @@ h2{font-size:1rem;margin:24px 0 8px}
       <label class="fieldlabel" for="appname">App name (optional)</label>
       <input id="appname" type="text" value="" placeholder="Choose a manifest first" autocomplete="off" spellcheck="false" style="font-family:inherit">
       <p class="help">What the app drawer and Settings show. Leave it empty to keep the name from the manifest (shown faded).</p>
+    </div>
+
+    <div class="block" id="apkOut" hidden>
+      <div class="swap">
+        <span class="old" id="apkOld"></span>
+        <span class="new" id="apkNew"></span>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn primary" id="apkBuild">Build and save APK</button>
+      </div>
+      <p id="apkMsg" class="msg" role="status" aria-live="polite"></p>
+      <dl class="stats" id="apkStats"></dl>
     </div>
 
     <div class="block" id="out" hidden>
@@ -219,6 +238,7 @@ function patch(text, OLD, NEW, label){
   const $ = id => document.getElementById(id);
   const fileEl = $('file'), nameEl = $('name'), msgEl = $('msg'), outEl = $('out');
   let src = '', fileName = '', patched = '', outName = 'AndroidManifest.xml', nameTouched = false, appTouched = false;
+  let apk = null, apkBusy = false;
 
   const msg = (text, kind) => { msgEl.textContent = text || ''; msgEl.dataset.kind = kind || ''; };
 
@@ -230,6 +250,10 @@ function patch(text, OLD, NEW, label){
 
   // faded default for the app name: the label already in the manifest
   function syncPlaceholder(){
+    if(!src && apk){
+      $('appname').placeholder = apk.labelKind === 'string' ? apk.label : (apk.labelKind === 'resource' ? 'Keeps the app\u2019s current name' : 'No label found in the manifest');
+      return;
+    }
     const l = src ? detectLabel(src) : null;
     $('appname').placeholder = !src ? 'Choose a manifest first' : (l || 'No label found in the manifest');
   }
@@ -309,7 +333,7 @@ function patch(text, OLD, NEW, label){
     $('pickText').textContent = 'Choose a different file';
     run();
   });
-  nameEl.addEventListener('input', () => { nameTouched = true; syncPlaceholder(); run(); });
+  nameEl.addEventListener('input', () => { nameTouched = true; syncPlaceholder(); run(); apkCheck(); });
   syncPlaceholder();
   $('appname').addEventListener('input', () => { appTouched = true; run(); });
 
@@ -341,6 +365,79 @@ function patch(text, OLD, NEW, label){
     btn.textContent = ok ? 'Copied' : 'Copy failed, use Download';
     setTimeout(() => { btn.textContent = 'Copy to clipboard'; }, 1800);
   });
+
+  // ---- APK mode: only inside the Android app, where AndroidBridge exists ----
+  if(window.AndroidBridge && window.AndroidBridge.pickApk) $('apkBlock').hidden = false;
+
+  const apkMsg = (t, k) => { $('apkMsg').textContent = t || ''; $('apkMsg').dataset.kind = k || ''; };
+
+  function apkCheck(){
+    $('apkOut').hidden = !apk;
+    if(!apk) return;
+    const r = buildPkg(apk.pkg, nameEl.value);
+    $('apkOld').textContent = apk.pkg;
+    $('apkNew').textContent = r.pkg || '\u2014';
+    $('apkBuild').disabled = !!r.err || apkBusy;
+    if(r.err) apkMsg(r.err, 'err');
+    else if(!apkBusy) apkMsg('', '');
+  }
+
+  $('apkPick').addEventListener('click', () => { if(!apkBusy) window.AndroidBridge.pickApk(); });
+
+  $('apkBuild').addEventListener('click', () => {
+    if(!apk || apkBusy) return;
+    const r = buildPkg(apk.pkg, nameEl.value);
+    if(r.err){ apkMsg(r.err, 'err'); return; }
+    apkBusy = true;
+    $('apkBuild').disabled = true;
+    $('apkStats').textContent = '';
+    apkMsg('Working\u2026', '');
+    window.AndroidBridge.buildApk(r.pkg, $('appname').value.trim());
+  });
+
+  // called by the app
+  window.onApkPicked = info => {
+    apk = info;
+    apkBusy = false;
+    let t = info.pkg + '  (' + (info.size / 1048576).toFixed(1) + ' MB)';
+    if(info.shared) t += '\nThis APK sets sharedUserId. The clone may fail to install.';
+    $('apkInfo').textContent = t;
+    $('apkPick').textContent = 'Choose a different APK';
+    if(!nameTouched) nameEl.value = info.pkg.split('.').pop() + '2';
+    if(!appTouched) $('appname').value = info.labelKind === 'string' ? info.label : '';
+    $('apkStats').textContent = '';
+    syncPlaceholder();
+    apkMsg('', '');
+    apkCheck();
+  };
+
+  window.onApkStatus = (text, kind) => {
+    apkMsg(text, kind);
+    if(kind === 'err' || kind === 'warn' || kind === 'ok'){
+      apkBusy = false;
+      if(apk){ apkCheck(); apkMsg(text, kind); }
+    }
+  };
+
+  window.onApkBuilt = c => {
+    const dl = $('apkStats');
+    dl.textContent = '';
+    const add = (l, v) => {
+      const dt = document.createElement('dt'); dt.textContent = l;
+      const dd = document.createElement('dd'); dd.textContent = v;
+      dl.append(dt, dd);
+    };
+    add('Package attribute', c.pkg);
+    add('Provider authorities', c.auth);
+    add('Permission and process names', c.perm);
+    add('Task affinities', c.aff);
+    add('Relative class names pinned', c.rel);
+    add('App name labels', c.lbl);
+    const w = [];
+    if(c.lblMissing) w.push('No label found on the <application> tag, so the app name was not changed.');
+    if(c.auth === 0) w.push('No provider authorities were changed. If the app has providers, check them by hand.');
+    apkMsg('Built and signed. Pick where to save it.' + (w.length ? ' ' + w.join(' ') : ''), w.length ? 'warn' : '');
+  };
 })();
 </script>
 </body>

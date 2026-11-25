@@ -18,8 +18,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("cloner") {
+            storeFile = rootProject.file("keystore/cloner.p12")
+            storeType = "pkcs12"
+            storePassword = "cloner123"
+            keyAlias = "cloner"
+            keyPassword = "cloner123"
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("cloner")
+        }
         release {
+            signingConfig = signingConfigs.getByName("cloner")
             optimization {
                 enable = false
             }
@@ -36,6 +50,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.apksig)
     implementation(libs.material)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
